@@ -1,0 +1,92 @@
+# Five-node EdgeQuota cluster for local integration / fault-injection testing.
+#
+#   docker compose up --build
+#   curl -H "X-Tenant-Id: acme" -d '{"hello":"world"}' http://localhost:8081/v1/echo
+#   ./scripts/fault-injection.sh          # kill/partition nodes and watch the cluster degrade gracefully
+#   ./scripts/load-test.sh                # generate multi-tenant traffic across all nodes
+#
+# Every node shares the same tenant quota config so the *cluster-wide* quota
+# (not a per-node quota) is what's actually being enforced -- that's the
+# whole point of the gossip-propagated global estimate.
+x-common-env: &common-env
+  TENANTS: "acme=5000,globex=2000,initech=1000"
+  WINDOW_MILLIS: "5000"
+  SAFETY_SLACK: "0.15"
+  CLUSTER_SIZE_HINT: "5"
+  CMS_EPSILON: "0.001"
+  CMS_DELTA: "0.01"
+
+services:
+  node-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    hostname: node-1
+    ports: ["8081:8080"]
+    environment:
+      <<: *common-env
+      NODE_ID: "node-1"
+      GOSSIP_PORT: "7946"
+      HTTP_PORT: "8080"
+      PEERS: "node-2=node-2:7946,node-3=node-3:7946,node-4=node-4:7946,node-5=node-5:7946"
+    networks: [edgequota-net]
+
+  node-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    hostname: node-2
+    ports: ["8082:8080"]
+    environment:
+      <<: *common-env
+      NODE_ID: "node-2"
+      GOSSIP_PORT: "7946"
+      HTTP_PORT: "8080"
+      PEERS: "node-1=node-1:7946,node-3=node-3:7946,node-4=node-4:7946,node-5=node-5:7946"
+    networks: [edgequota-net]
+
+  node-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    hostname: node-3
+    ports: ["8083:8080"]
+    environment:
+      <<: *common-env
+      NODE_ID: "node-3"
+      GOSSIP_PORT: "7946"
+      HTTP_PORT: "8080"
+      PEERS: "node-1=node-1:7946,node-2=node-2:7946,node-4=node-4:7946,node-5=node-5:7946"
+    networks: [edgequota-net]
+
+  node-4:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    hostname: node-4
+    ports: ["8084:8080"]
+    environment:
+      <<: *common-env
+      NODE_ID: "node-4"
+      GOSSIP_PORT: "7946"
+      HTTP_PORT: "8080"
+      PEERS: "node-1=node-1:7946,node-2=node-2:7946,node-3=node-3:7946,node-5=node-5:7946"
+    networks: [edgequota-net]
+
+  node-5:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    hostname: node-5
+    ports: ["8085:8080"]
+    environment:
+      <<: *common-env
+      NODE_ID: "node-5"
+      GOSSIP_PORT: "7946"
+      HTTP_PORT: "8080"
+      PEERS: "node-1=node-1:7946,node-2=node-2:7946,node-3=node-3:7946,node-4=node-4:7946"
+    networks: [edgequota-net]
+
+networks:
+  edgequota-net:
+    driver: bridge
