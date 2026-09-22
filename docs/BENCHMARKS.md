@@ -105,3 +105,53 @@ docker compose up --build                    # real 5-container cluster
 ./scripts/load-test.sh                       # multi-tenant concurrent load against the docker cluster
 ./scripts/fault-injection.sh both            # kill + partition a node, watch the cluster degrade gracefully
 ```
+
+## 5. Redis-backed vs. local-decision latency and availability (measured, not architectural hand-waving)
+
+The README and design doc claim EdgeQuota's local-decision approach beats
+a centralized Redis-backed limiter on latency and availability. That claim
+was originally architectural reasoning only. It's now backed by an actual
+measurement: `docs/prototypes/redis_vs_edgequota_bench.py` runs a real
+`redis-server` binary (via `redislite`, not a mock) and compares it
+against a local Count-Min-Sketch-backed check, on the same machine, same
+process, same loopback interface -- so the only variable is "does this
+request need a round trip to a shared store."
+
+**Setup**: a realistic atomic Redis check-and-increment (single Lua
+`EVAL`: `GET` then conditional `INCRBY`, which is the correct way to do
+this without a race condition -- not a naive `GET` then `SET`) vs. a local
+sketch `estimate()` + `update()`. 20,000 requests each, after a 2,000-
+request warmup.
+
+```
+                          mean    median       p95       p99   throughput (req/s)
+Redis (TCP, local)       556.3     468.4     972.7    1902.1                 1790
+EdgeQuota (local CMS)      19.3      14.4      30.3      94.8               48891
+
+local check is ~28.8x faster than the Redis round trip
+```
+
+**Read this honestly**: this is measured on loopback with zero real
+network latency -- the most generous possible case for Redis. A real
+multi-region deployment adds tens of milliseconds of real network RTT to
+the Redis path while the local-check number is architecturally unaffected
+by topology at all, so the actual gap in a real deployment would be
+larger than 28.8x, not smaller. The local side is measured in Python here
+(mirroring the real Java `CountMinSketch` logic) purely so both sides are
+measured in the same language for a fair comparison -- the real Java
+implementation is expected to be faster than this number, not slower.
+
+**Availability**: `docs/prototypes/availability_check.py` kills the Redis
+process mid-run and measures what happens next: 10/10 subsequent requests
+to the Redis-backed path failed immediately (connection refused). A local-
+decision check has no code path that depends on a remote coordinator at
+all, so there is nothing to fail in that way -- this isn't "handles the
+outage gracefully", it's "the failure mode doesn't exist for this
+component."
+
+Reproduce with:
+```bash
+pip install redislite redis
+python3 docs/prototypes/redis_vs_edgequota_bench.py
+python3 docs/prototypes/availability_check.py
+```
